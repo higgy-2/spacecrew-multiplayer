@@ -1,0 +1,9 @@
+{
+  "name": "spacecrew-multiplayer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A small browser-based multiplayer spaceship mystery game",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "ws": "^8.18.0" }
+}
