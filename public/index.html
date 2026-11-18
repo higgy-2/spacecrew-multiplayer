@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SpaceCrew — Multiplayer</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#080d18;color:#edf4ff;font-family:Arial,sans-serif}
+main{max-width:980px;margin:auto;padding:18px}h1{color:#ff5364;letter-spacing:2px;margin:8px 0}
+.panel{background:#111d31;border:1px solid #263b5d;border-radius:14px;padding:16px;margin:12px 0}
+input,button{font:inherit;border-radius:9px;padding:11px;border:1px solid #496080}
+input{background:#091426;color:white;max-width:100%}button{background:#2b6de0;color:white;border:0;font-weight:bold;cursor:pointer;margin:4px}
+button:disabled{opacity:.4;cursor:not-allowed}.muted{color:#a9bad3;font-size:14px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.hidden{display:none!important}
+#game{width:100%;height:auto;background:#0b1728;border:2px solid #294366;border-radius:12px;display:block;touch-action:none}
+#status{min-height:24px;color:#ffcf70}.players{display:flex;gap:8px;flex-wrap:wrap}.player{background:#1a2a43;border-radius:8px;padding:7px 10px;font-size:13px}
+#controls{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:10px}
+.actions button{background:#b52e48}.tasks button{background:#167b68}
+#mobile{display:none;gap:5px;grid-template-columns:repeat(3,48px);grid-template-rows:repeat(2,42px)}
+#mobile button{margin:0;padding:4px}
+@media(max-width:650px){main{padding:10px}#mobile{display:grid}.panel{padding:12px}}
+</style></head>
+<body><main>
+<h1>SPACE CREW</h1><div class="muted">A tiny online spaceship mystery. Invite friends with your room code.</div>
+<section id="lobby" class="panel">
+ <div class="row"><input id="name" maxlength="14" placeholder="Your name" value="Crewmate">
+ <button id="create">Create room</button></div>
+ <div class="row" style="margin-top:10px"><input id="roomCode" maxlength="5" placeholder="ROOM CODE" style="text-transform:uppercase">
+ <button id="join">Join room</button></div>
+ <p class="muted">One person creates a room and shares the 5-character code. Up to 10 players.</p>
+</section>
+<section id="waiting" class="panel hidden">
+ <div class="row"><strong>Room code:</strong><span id="codeDisplay" style="font-size:24px;color:#ffcf70;letter-spacing:4px"></span><button id="copy">Copy code</button></div>
+ <p class="muted">Waiting for everyone to join...</p><div id="waitingPlayers" class="players"></div>
+ <button id="start">Start game (host)</button>
+</section>
+<section id="play" class="hidden">
+ <div class="panel row"><strong id="phase">In game</strong><span id="status"></span></div>
+ <canvas id="game" width="700" height="500"></canvas>
+ <div id="controls">
+  <div id="mobile">
+   <span></span><button data-dir="up">▲</button><span></span>
+   <button data-dir="left">◀</button><button data-dir="down">▼</button><button data-dir="right">▶</button>
+  </div>
+  <div class="tasks"><button id="task">Do nearby task</button><button id="report">Call meeting</button></div>
+  <div class="actions"><button id="kill">Eliminate nearby</button></div>
+ </div>
+ <div class="panel"><strong>Players</strong><div id="playerList" class="players" style="margin-top:8px"></div></div>
+ <div id="meeting" class="panel hidden"><strong>Meeting — vote</strong><div id="voteButtons" class="row"></div><button id="skip">Skip vote</button></div>
+</section>
+<div id="error" style="color:#ff8b9a;margin:10px"></div>
+<p class="muted">Controls: WASD or arrow keys. Walk to a glowing task station and press “Do nearby task”. Impostor can eliminate nearby crewmates. This is a simple fan-made prototype.</p>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let ws, myId=null, roomCode="", state=null, me=null, x=380,y=280, keys={}, lastMove=0;
+const colors=["#45d6ff","#ffcc4d","#ff6b8a","#a78bfa","#6ee7a8","#fb923c","#f0abfc","#cbd5e1","#f87171","#67e8f9"];
+function connect(type,code=""){
+  $("error").textContent="";
+  const proto=location.protocol==="https:"?"wss":"ws";
+  ws=new WebSocket(`${proto}://${location.host}`);
+  ws.onopen=()=>ws.send(JSON.stringify({type,name:$("name").value||"Crewmate",code,color:colors[Math.floor(Math.random()*colors.length)]}));
+  ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==="error"){$("error").textContent=m.message;return}
+    if(m.type==="joined"){myId=m.id;roomCode=m.code;$("lobby").classList.add("hidden");$("waiting").classList.remove("hidden");$("codeDisplay").textContent=roomCode}
+    if(m.type==="state"){state=m;render()}
+  };
+  ws.onclose=()=>{$("error").textContent="Disconnected from server. Refresh to reconnect."};
+}
+$("create").onclick=()=>connect("create");
+$("join").onclick=()=>{const c=$("roomCode").value.trim().toUpperCase();if(c.length!==5){$("error").textContent="Enter a 5-character room code.";return}connect("join",c)};
+$("copy").onclick=()=>navigator.clipboard?.writeText(roomCode);
+$("start").onclick=()=>send({type:"start"});
+function send(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o))}
+function render(){
+ if(!state)return;
+ const players=state.players;me=players.find(p=>p.id===myId);
+ if(me){x=me.x;y=me.y}
+ $("waitingPlayers").innerHTML=players.map(p=>`<span class="player">${esc(p.name)}${p.id===state.hostId?" ★":""}</span>`).join("");
+ $("start").disabled=state.hostId!==myId||players.length<2;
+ if(state.phase==="lobby")return;
+ $("waiting").classList.add("hidden");$("play").classList.remove("hidden");
+ $("phase").textContent=({playing:"Explore the ship",meeting:"Emergency meeting",crewmates_win:"Crewmates win!",impostor_win:"Impostor wins!"})[state.phase]||state.phase;
+ $("status").textContent=state.message||"";
+ $("meeting").classList.toggle("hidden",state.phase!=="meeting");
+ $("playerList").innerHTML=players.map(p=>`<span class="player" style="border-left:4px solid ${p.color}">${esc(p.name)} ${p.alive?"":"☠"} ${p.id===myId?"(you)":""} ${p.id===myId&&!p.isImpostor&&!p.done===undefined?"":""}</span>`).join("");
+ $("voteButtons").innerHTML=players.filter(p=>p.alive&&p.id!==myId).map(p=>`<button data-vote="${p.id}">${esc(p.name)}</button>`).join("");
+ document.querySelectorAll("[data-vote]").forEach(b=>b.onclick=()=>send({type:"vote",target:b.dataset.vote}));
+ $("kill").disabled=!(me&&me.isImpostor&&me.alive&&state.phase==="playing");
+ $("task").disabled=!(me&& !me.isImpostor&&me.alive&&state.phase==="playing");
+ $("report").disabled=!(me&&me.alive&&state.phase==="playing");
+ draw();
+}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+$("skip").onclick=()=>send({type:"vote",target:"skip"});
+$("report").onclick=()=>send({type:"report"});
+$("task").onclick=()=>{if(!me)return;const stations=[[100,100],[350,90],[600,110],[130,390],[560,390]];let near=stations.some(([a,b])=>Math.hypot(x-a,y-b)<65);if(near)send({type:"task"});else $("status").textContent="Move close to a glowing station first."};
+$("kill").onclick=()=>{if(!me||!state)return;const target=state.players.find(p=>p.alive&&!p.isImpostor&&Math.hypot(p.x-x,p.y-y)<55);if(target)send({type:"kill",target:target.id});else $("status").textContent="No crewmate close enough."};
+function draw(){
+ const c=$("game"),ctx=c.getContext("2d");ctx.clearRect(0,0,700,500);
+ ctx.fillStyle="#0b1728";ctx.fillRect(0,0,700,500);
+ ctx.strokeStyle="#203650";ctx.lineWidth=2;
+ for(let i=0;i<700;i+=35){ctx.beginPath();ctx.moveTo(i,0);ctx.lineTo(i,500);ctx.stroke()}
+ for(let j=0;j<500;j+=35){ctx.beginPath();ctx.moveTo(0,j);ctx.lineTo(700,j);ctx.stroke()}
+ // room outlines
+ ctx.strokeStyle="#47617e";ctx.lineWidth=4;
+ [[25,25,190,145],[255,20,190,145],[485,25,190,145],[25,330,190,145],[485,330,190,145]].forEach(([a,b,w,h])=>ctx.strokeRect(a,b,w,h));
+ const stations=[[100,100],[350,90],[600,110],[130,390],[560,390]];
+ stations.forEach(([a,b],i)=>{ctx.fillStyle="#ffcf70";ctx.shadowColor="#ffcf70";ctx.shadowBlur=14;ctx.beginPath();ctx.arc(a,b,11,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;ctx.fillStyle="#fff0bd";ctx.font="11px Arial";ctx.fillText("TASK "+(i+1),a-22,b+28)});
+ if(state)state.players.forEach(p=>{if(!p.alive)return;ctx.fillStyle=p.color;ctx.beginPath();ctx.roundRect(p.x-13,p.y-16,26,32,10);ctx.fill();ctx.fillStyle="#bceeff";ctx.fillRect(p.x-9,p.y-10,18,8);ctx.fillStyle="white";ctx.font="12px Arial";ctx.textAlign="center";ctx.fillText(p.name,p.x,p.y-24);if(p.id===myId){ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.strokeRect(p.x-17,p.y-20,34,40)}});
+ ctx.textAlign="left";
+ if(me&&me.isImpostor){ctx.fillStyle="#ff7585";ctx.font="bold 14px Arial";ctx.fillText("IMPOSTOR",15,490)}
+ else if(me){ctx.fillStyle="#9ee7c5";ctx.font="14px Arial";ctx.fillText("Tasks: "+me.done+"/"+me.tasks,15,490)}
+}
+function step(){
+ if(state&&state.phase==="playing"&&me&&me.alive){
+  let dx=0,dy=0;if(keys.ArrowUp||keys.w)dy--;if(keys.ArrowDown||keys.s)dy++;if(keys.ArrowLeft||keys.a)dx--;if(keys.ArrowRight||keys.d)dx++;
+  if(dx||dy){const n=Math.hypot(dx,dy);x=Math.max(35,Math.min(665,x+dx/n*3));y=Math.max(35,Math.min(465,y+dy/n*3));
+   if(Date.now()-lastMove>70){send({type:"move",x,y});lastMove=Date.now()}
+  }
+ }
+ requestAnimationFrame(step);
+}
+window.addEventListener("keydown",e=>{if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key))e.preventDefault();keys[e.key]=true});
+window.addEventListener("keyup",e=>keys[e.key]=false);
+document.querySelectorAll("[data-dir]").forEach(b=>{const d=b.dataset.dir;const k={up:"ArrowUp",down:"ArrowDown",left:"ArrowLeft",right:"ArrowRight"}[d];b.addEventListener("pointerdown",e=>{e.preventDefault();keys[k]=true});["pointerup","pointerleave","pointercancel"].forEach(ev=>b.addEventListener(ev,()=>keys[k]=false))});
+requestAnimationFrame(step);
+</script></body></html>
